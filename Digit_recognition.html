@@ -1,0 +1,208 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Handwritten Digit Recognition</title>
+<style>
+  :root { --bg:#f4f6fb; --card:#fff; --text:#222; --muted:#666; --accent:#2b3a67; --bar:#4f6bd6; --track:#e6e9f2; }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg:#12151f; --card:#1c2030; --text:#eee; --muted:#9aa; --accent:#8fa4ff; --bar:#6f86f0; --track:#2a3048; }
+  }
+  * { box-sizing: border-box; }
+  body { font-family: Arial, sans-serif; margin:0; background:var(--bg); color:var(--text); }
+  header { background:#2b3a67; color:#fff; padding:26px 20px; text-align:center; }
+  header h1 { margin:0 0 6px; font-size:26px; }
+  header p { margin:0; opacity:.85; }
+  main { max-width:900px; margin:0 auto; padding:18px; }
+  .card { background:var(--card); border-radius:10px; padding:20px; margin-bottom:18px; box-shadow:0 2px 6px rgba(0,0,0,.08); }
+  h2 { margin-top:0; color:var(--accent); }
+  .demo { display:flex; flex-wrap:wrap; gap:24px; }
+  .col { flex:1 1 280px; }
+  #pad { width:100%; max-width:280px; aspect-ratio:1; border:2px solid var(--accent); border-radius:8px;
+         background:#fff; touch-action:none; cursor:crosshair; display:block; }
+  button { margin-top:10px; padding:10px 18px; font-size:15px; border:0; border-radius:6px;
+           background:var(--accent); color:#fff; cursor:pointer; }
+  #bigdigit { font-size:84px; font-weight:bold; line-height:1; color:var(--accent); min-height:84px; }
+  #conf { color:var(--muted); min-height:22px; margin-bottom:10px; }
+  .row { display:flex; align-items:center; gap:8px; margin:3px 0; font-size:14px; }
+  .row .lab { width:14px; text-align:right; }
+  .row .track { flex:1; height:12px; background:var(--track); border-radius:6px; overflow:hidden; }
+  .row .fill { height:100%; width:0; background:var(--bar); transition:width .12s; }
+  .row .pct { width:44px; color:var(--muted); font-size:12px; }
+  #seen { width:112px; height:112px; image-rendering:pixelated; border:1px solid var(--track); background:#000; border-radius:4px; }
+  .small { font-size:13px; color:var(--muted); }
+  #status { color:#c0392b; font-size:14px; }
+  footer { text-align:center; padding:20px; color:var(--muted); font-size:14px; }
+</style>
+</head>
+<body>
+<header>
+  <h1>Handwritten Digit Recognition</h1>
+  <p>Machine Learning mini project (TE, SPPU)</p>
+</header>
+
+<main>
+  <div class="card">
+    <h2>Try it live</h2>
+    <p>Draw <b>one digit (0 to 9)</b>, big, thick and in the middle of the box. The prediction updates as you draw.</p>
+    <div class="demo">
+      <div class="col">
+        <canvas id="pad" width="280" height="280"></canvas>
+        <button id="clear">Clear</button>
+        <div id="status">Loading model...</div>
+      </div>
+      <div class="col">
+        <div id="bigdigit">-</div>
+        <div id="conf">Draw something to see the prediction</div>
+        <div id="bars"></div>
+        <p class="small" style="margin-top:14px">What the model sees (28 x 28):</p>
+        <canvas id="seen" width="28" height="28"></canvas>
+      </div>
+    </div>
+  </div>
+
+  <div class="card">
+    <h2>About the project</h2>
+    <p>The model was trained on the MNIST dataset of handwritten digits. In the notebook, four models
+       (Logistic Regression, KNN, Random Forest, SVM) were compared and validated. For this website, a small
+       neural network (MLP) was trained on the same data, because it is light enough to run directly in your browser.
+       Nothing is sent to a server.</p>
+    <p><b>How a drawing is processed:</b> the digit is cropped, resized to 20 x 20, centred in a 28 x 28 image
+       (like MNIST), and passed through the network, which outputs a probability for each digit.</p>
+    <p class="small">Source code: <a href="https://github.com/kartik108-Ind/Digi_recoginition">GitHub</a></p>
+  </div>
+</main>
+<footer>Made by YOUR NAME</footer>
+
+<script>
+// ==== CORE START (image preparation + neural network, no browser-only code) ====
+function toMnist(gray, W, H) {
+  // gray: values 0..255, digit = bright, background = 0
+  let minX = W, minY = H, maxX = -1, maxY = -1;
+  for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) {
+    if (gray[y * W + x] > 30) {
+      if (x < minX) minX = x; if (x > maxX) maxX = x;
+      if (y < minY) minY = y; if (y > maxY) maxY = y;
+    }
+  }
+  if (maxX < 0) return null;                      // nothing drawn
+
+  const w = maxX - minX + 1, h = maxY - minY + 1; // crop around the digit
+  const scale = 20 / Math.max(w, h);              // longer side becomes 20 pixels
+  const nw = Math.max(1, Math.round(w * scale));
+  const nh = Math.max(1, Math.round(h * scale));
+
+  const small = new Float32Array(nw * nh);        // area-average resize
+  for (let oy = 0; oy < nh; oy++) {
+    const y0 = minY + oy * h / nh, y1 = minY + (oy + 1) * h / nh;
+    for (let ox = 0; ox < nw; ox++) {
+      const x0 = minX + ox * w / nw, x1 = minX + (ox + 1) * w / nw;
+      let sum = 0, wsum = 0;
+      for (let yy = Math.floor(y0); yy < Math.ceil(y1); yy++) {
+        const wy = Math.min(yy + 1, y1) - Math.max(yy, y0);
+        for (let xx = Math.floor(x0); xx < Math.ceil(x1); xx++) {
+          const wx = Math.min(xx + 1, x1) - Math.max(xx, x0);
+          sum += gray[yy * W + xx] * wy * wx; wsum += wy * wx;
+        }
+      }
+      small[oy * nw + ox] = wsum > 0 ? sum / wsum : 0;
+    }
+  }
+
+  const box = new Float32Array(784);              // place in the middle of 28 x 28
+  const top = Math.floor((28 - nh) / 2), left = Math.floor((28 - nw) / 2);
+  for (let y = 0; y < nh; y++) for (let x = 0; x < nw; x++) box[(top + y) * 28 + left + x] = small[y * nw + x];
+
+  let total = 0, cy = 0, cx = 0;                  // centre of mass
+  for (let y = 0; y < 28; y++) for (let x = 0; x < 28; x++) {
+    const v = box[y * 28 + x]; total += v; cy += y * v; cx += x * v;
+  }
+  cy /= total; cx /= total;
+  const dy = Math.round(14 - cy), dx = Math.round(14 - cx);
+
+  const out = new Float32Array(784);              // shift so the centre of mass is at the middle
+  for (let y = 0; y < 28; y++) for (let x = 0; x < 28; x++) {
+    const ny = y + dy, nx = x + dx;
+    if (ny >= 0 && ny < 28 && nx >= 0 && nx < 28) out[ny * 28 + nx] = Math.min(255, box[y * 28 + x]) / 255;
+  }
+  return out;                                     // 784 values between 0 and 1
+}
+
+function predictProbs(x, m) {
+  // Neural network: input(784) -> hidden (ReLU) -> output(10) -> softmax
+  const H = m.hidden, h = Float32Array.from(m.b1);
+  for (let i = 0; i < 784; i++) {
+    const v = x[i];
+    if (v !== 0) for (let j = 0; j < H; j++) h[j] += v * m.W1[i * H + j];
+  }
+  const o = new Float64Array(10);
+  for (let k = 0; k < 10; k++) o[k] = m.b2[k];
+  for (let j = 0; j < H; j++) {
+    const a = h[j] > 0 ? h[j] : 0;
+    if (a !== 0) for (let k = 0; k < 10; k++) o[k] += a * m.W2[j * 10 + k];
+  }
+  const mx = Math.max(...o); let s = 0;
+  const p = Array.from(o, v => { const e = Math.exp(v - mx); s += e; return e; });
+  return p.map(v => v / s);
+}
+// ==== CORE END ====
+
+// ---------- Page code (browser only) ----------
+const pad = document.getElementById('pad'), ctx = pad.getContext('2d');
+const seen = document.getElementById('seen'), sctx = seen.getContext('2d');
+const bigdigit = document.getElementById('bigdigit'), conf = document.getElementById('conf');
+const statusEl = document.getElementById('status'), barsEl = document.getElementById('bars');
+let model = null;
+
+const fills = [], pcts = [];
+for (let d = 0; d < 10; d++) {
+  const row = document.createElement('div'); row.className = 'row';
+  row.innerHTML = '<span class="lab">' + d + '</span><div class="track"><div class="fill"></div></div><span class="pct">0%</span>';
+  barsEl.appendChild(row); fills.push(row.querySelector('.fill')); pcts.push(row.querySelector('.pct'));
+}
+
+function resetUI() {
+  bigdigit.textContent = '-'; conf.textContent = 'Draw something to see the prediction';
+  fills.forEach(f => f.style.width = '0'); pcts.forEach(p => p.textContent = '0%');
+  sctx.fillStyle = '#000'; sctx.fillRect(0, 0, 28, 28);
+}
+function clearPad() { ctx.fillStyle = '#fff'; ctx.fillRect(0, 0, 280, 280); resetUI(); }
+ctx.lineWidth = 20; ctx.lineCap = 'round'; ctx.lineJoin = 'round'; ctx.strokeStyle = '#000';
+clearPad();
+
+function predict() {
+  if (!model) return;
+  const d = ctx.getImageData(0, 0, 280, 280).data, gray = new Float32Array(280 * 280);
+  for (let i = 0; i < gray.length; i++) gray[i] = 255 - (d[4 * i] + d[4 * i + 1] + d[4 * i + 2]) / 3;
+  const x = toMnist(gray, 280, 280);
+  if (!x) { resetUI(); return; }
+  const p = predictProbs(x, model);
+  const best = p.indexOf(Math.max(...p));
+  bigdigit.textContent = best;
+  conf.textContent = 'Confidence: ' + (p[best] * 100).toFixed(1) + '%' + (p[best] < 0.5 ? ' (not sure, try drawing bigger)' : '');
+  p.forEach((v, k) => { fills[k].style.width = (v * 100) + '%'; pcts[k].textContent = (v * 100).toFixed(0) + '%'; });
+  const img = sctx.createImageData(28, 28);
+  for (let i = 0; i < 784; i++) { const v = Math.round(x[i] * 255); img.data.set([v, v, v, 255], 4 * i); }
+  sctx.putImageData(img, 0, 0);
+}
+
+let drawing = false, last = null, timer = null;
+function pos(e) { const r = pad.getBoundingClientRect(), s = 280 / r.width; return { x: (e.clientX - r.left) * s, y: (e.clientY - r.top) * s }; }
+pad.addEventListener('pointerdown', e => {
+  drawing = true; last = pos(e); pad.setPointerCapture(e.pointerId);
+  ctx.beginPath(); ctx.moveTo(last.x, last.y); ctx.lineTo(last.x + 0.1, last.y + 0.1); ctx.stroke();
+});
+pad.addEventListener('pointermove', e => {
+  if (!drawing) return;
+  const p = pos(e); ctx.beginPath(); ctx.moveTo(last.x, last.y); ctx.lineTo(p.x, p.y); ctx.stroke(); last = p;
+  if (!timer) timer = setTimeout(() => { timer = null; predict(); }, 60);
+});
+['pointerup', 'pointercancel'].forEach(t => pad.addEventListener(t, () => { drawing = false; predict(); }));
+document.getElementById('clear').addEventListener('click', clearPad);
+
+fetch('model.json').then(r => r.json()).then(m => { model = m; statusEl.textContent = ''; predict(); })
+  .catch(() => { statusEl.textContent = 'Could not load model.json. Put it in the same folder as this page and open the page through the website link (not by double-clicking the file).'; });
+</script>
+</body>
+</html>
